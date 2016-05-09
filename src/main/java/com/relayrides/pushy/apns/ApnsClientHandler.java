@@ -59,7 +59,6 @@ import io.netty.util.concurrent.ScheduledFuture;
 class ApnsClientHandler<T extends ApnsPushNotification> extends Http2ConnectionHandler {
 
     private long nextStreamId = 1;
-    private volatile long lastWriteTimestamp;
     private final Map<Integer, T> pushNotificationsByStreamId = new HashMap<>();
     private final Map<Integer, Http2Headers> headersByStreamId = new HashMap<>();
 
@@ -205,8 +204,6 @@ class ApnsClientHandler<T extends ApnsPushNotification> extends Http2ConnectionH
         try {
             // We'll catch class cast issues gracefully
             final T pushNotification = (T) message;
-            
-            lastWriteTimestamp = System.currentTimeMillis();
             final int streamId = (int) this.nextStreamId;
 
             final ByteBuf payloadBuffer = context.alloc().ioBuffer(INITIAL_PAYLOAD_BUFFER_CAPACITY);
