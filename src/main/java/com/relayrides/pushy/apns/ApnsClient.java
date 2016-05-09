@@ -167,6 +167,14 @@ public class ApnsClient<T extends ApnsPushNotification> {
      */
     public static final int DEFAULT_APNS_PORT = 443;
 
+    /*
+     * If there are no incoming messages on the channel after READ_TIMEOUT seconds
+     * then we suspect that the server has closed the connection and send a ping
+     * to test the connection.
+     */
+    private static int readIdleTimeout = 5;
+    private boolean isDisconnecting = false;
+    
     /**
      * <p>An alternative port for communication with the APNs gateway. According to Apple's documentation:</p>
      *
@@ -425,14 +433,14 @@ public class ApnsClient<T extends ApnsPushNotification> {
                                     .apnsClient(ApnsClient.this)
                                     .encoderEnforceMaxConcurrentStreams(true)
                                     .build();
-
+                            
                             synchronized (ApnsClient.this.bootstrap) {
                                 if (ApnsClient.this.gracefulShutdownTimeoutMillis != null) {
                                     apnsClientHandler.gracefulShutdownTimeoutMillis(ApnsClient.this.gracefulShutdownTimeoutMillis);
                                 }
                             }
 
-                            context.pipeline().addLast(new IdleStateHandler(0, 0, PING_IDLE_TIME));
+                            context.pipeline().addLast(new IdleStateHandler(readIdleTimeout, 0, PING_IDLE_TIME));
                             context.pipeline().addLast(apnsClientHandler);
 
                             // Add this to the end of the queue so any events enqueued by the client handler happen
@@ -555,6 +563,10 @@ public class ApnsClient<T extends ApnsPushNotification> {
         this.writeTimeoutMillis = writeTimeoutMillis;
     }
 
+    public void setReadIdleTimeout(int readIdleTimeout) {
+    	this.readIdleTimeout = readIdleTimeout;
+    }
+    
     /**
      * Sets the proxy handler factory to be used to construct proxy handlers when establishing a new connection to the
      * APNs gateway. Proxy handlers are added to the beginning of the client's pipeline. A client's proxy handler
@@ -683,6 +695,7 @@ public class ApnsClient<T extends ApnsPushNotification> {
                         public void operationComplete(final ChannelFuture future) throws Exception {
                             if (future.isSuccess()) {
                                 synchronized (ApnsClient.this.bootstrap) {
+                                	isDisconnecting = false;
                                     if (ApnsClient.this.reconnectionPromise != null) {
                                         log.info("Connection to {} restored.", future.channel().remoteAddress());
                                         ApnsClient.this.reconnectionPromise.trySuccess();
@@ -720,7 +733,7 @@ public class ApnsClient<T extends ApnsPushNotification> {
      */
     public boolean isConnected() {
         final ChannelPromise connectionReadyPromise = this.connectionReadyPromise;
-        return (connectionReadyPromise != null && connectionReadyPromise.isSuccess());
+        return (!isDisconnecting && connectionReadyPromise != null && connectionReadyPromise.isSuccess());
     }
 
     /**
@@ -893,6 +906,10 @@ public class ApnsClient<T extends ApnsPushNotification> {
         }
     }
 
+    public void setDisconnecting(boolean isDisconnecting) {
+    	this.isDisconnecting = isDisconnecting;
+    }
+    
     /**
      * <p>Gracefully disconnects from the APNs gateway. The disconnection process will wait until notifications in
      * flight have been either accepted or rejected by the gateway. The returned {@code Future} will be marked as

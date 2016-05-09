@@ -48,6 +48,7 @@ import io.netty.handler.codec.http2.Http2Exception;
 import io.netty.handler.codec.http2.Http2FrameAdapter;
 import io.netty.handler.codec.http2.Http2Headers;
 import io.netty.handler.codec.http2.Http2Settings;
+import io.netty.handler.timeout.IdleState;
 import io.netty.handler.timeout.IdleStateEvent;
 import io.netty.handler.timeout.WriteTimeoutException;
 import io.netty.util.AsciiString;
@@ -58,7 +59,7 @@ import io.netty.util.concurrent.ScheduledFuture;
 class ApnsClientHandler<T extends ApnsPushNotification> extends Http2ConnectionHandler {
 
     private long nextStreamId = 1;
-
+    private volatile long lastWriteTimestamp;
     private final Map<Integer, T> pushNotificationsByStreamId = new HashMap<>();
     private final Map<Integer, Http2Headers> headersByStreamId = new HashMap<>();
 
@@ -67,6 +68,7 @@ class ApnsClientHandler<T extends ApnsPushNotification> extends Http2ConnectionH
     private long nextPingId = new Random().nextLong();
     private ScheduledFuture<?> pingTimeoutFuture;
 
+    private int readIdlePingTimeout = 4; // seconds
     private static final int PING_TIMEOUT = 30; // seconds
 
     private static final String APNS_PATH_PREFIX = "/3/device/";
@@ -89,12 +91,17 @@ class ApnsClientHandler<T extends ApnsPushNotification> extends Http2ConnectionH
     public static class ApnsClientHandlerBuilder<S extends ApnsPushNotification> extends AbstractHttp2ConnectionHandlerBuilder<ApnsClientHandler<S>, ApnsClientHandlerBuilder<S>> {
 
         private ApnsClient<S> apnsClient;
-
+        private int readIdlePingTimeout;
+        
         public ApnsClientHandlerBuilder<S> apnsClient(final ApnsClient<S> apnsClient) {
             this.apnsClient = apnsClient;
             return this;
         }
 
+        public void setReadIdlePingTimeout(int readIdlePingTimeout) {
+        	this.readIdlePingTimeout = readIdlePingTimeout;
+        }
+        
         public ApnsClient<S> apnsClient() {
             return this.apnsClient;
         }
@@ -111,7 +118,7 @@ class ApnsClientHandler<T extends ApnsPushNotification> extends Http2ConnectionH
 
         @Override
         public ApnsClientHandler<S> build(final Http2ConnectionDecoder decoder, final Http2ConnectionEncoder encoder, final Http2Settings initialSettings) {
-            final ApnsClientHandler<S> handler = new ApnsClientHandler<>(decoder, encoder, initialSettings, this.apnsClient());
+            final ApnsClientHandler<S> handler = new ApnsClientHandler<>(decoder, encoder, initialSettings, this.apnsClient(), readIdlePingTimeout);
             this.frameListener(handler.new ApnsClientHandlerFrameAdapter());
             return handler;
         }
@@ -186,9 +193,9 @@ class ApnsClientHandler<T extends ApnsPushNotification> extends Http2ConnectionH
         }
     }
 
-    protected ApnsClientHandler(final Http2ConnectionDecoder decoder, final Http2ConnectionEncoder encoder, final Http2Settings initialSettings, final ApnsClient<T> apnsClient) {
+    protected ApnsClientHandler(final Http2ConnectionDecoder decoder, final Http2ConnectionEncoder encoder, final Http2Settings initialSettings, final ApnsClient<T> apnsClient, int readIdlePingTimeout) {
         super(decoder, encoder, initialSettings);
-
+        this.readIdlePingTimeout = readIdlePingTimeout;
         this.apnsClient = apnsClient;
     }
 
@@ -198,7 +205,8 @@ class ApnsClientHandler<T extends ApnsPushNotification> extends Http2ConnectionH
         try {
             // We'll catch class cast issues gracefully
             final T pushNotification = (T) message;
-
+            
+            lastWriteTimestamp = System.currentTimeMillis();
             final int streamId = (int) this.nextStreamId;
 
             final ByteBuf payloadBuffer = context.alloc().ioBuffer(INITIAL_PAYLOAD_BUFFER_CAPACITY);
@@ -262,10 +270,17 @@ class ApnsClientHandler<T extends ApnsPushNotification> extends Http2ConnectionH
     @Override
     public void userEventTriggered(final ChannelHandlerContext context, final Object event) throws Exception {
         if (event instanceof IdleStateEvent) {
-
             assert PING_TIMEOUT < ApnsClient.PING_IDLE_TIME;
-
-            log.trace("Sending ping due to inactivity.");
+            IdleStateEvent e = (IdleStateEvent) event;
+            final int pingTimeout;
+            if (e.state() == IdleState.READER_IDLE) {
+            	log.warn("Sending ping due to read idle timeout");
+            	pingTimeout = readIdlePingTimeout;
+            } 
+            else {
+                log.trace("Sending ping due to inactivity.");
+                pingTimeout = PING_TIMEOUT;
+            }
 
             final ByteBuf pingDataBuffer = context.alloc().ioBuffer(8, 8);
             pingDataBuffer.writeLong(this.nextPingId++);
@@ -279,10 +294,11 @@ class ApnsClientHandler<T extends ApnsPushNotification> extends Http2ConnectionH
 
                             @Override
                             public void run() {
-                                log.debug("Closing channel due to ping timeout.");
+                                log.debug("Closing channel due to ping timeout");
                                 future.channel().close();
+                                apnsClient.setDisconnecting(true);
                             }
-                        }, PING_TIMEOUT, TimeUnit.SECONDS);
+                        }, pingTimeout, TimeUnit.SECONDS);
                     } else {
                         log.debug("Failed to write PING frame.", future.cause());
                         future.channel().close();
