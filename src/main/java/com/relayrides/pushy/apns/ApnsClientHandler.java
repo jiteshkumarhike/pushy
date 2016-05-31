@@ -180,6 +180,7 @@ class ApnsClientHandler<T extends ApnsPushNotification> extends Http2ConnectionH
         public void onPingAckRead(final ChannelHandlerContext context, final ByteBuf data) {
             if (ApnsClientHandler.this.pingTimeoutFuture != null) {
                 log.trace("Received reply to ping.");
+                apnsClient.setDisconnecting(false);
                 ApnsClientHandler.this.pingTimeoutFuture.cancel(false);
             } else {
                 log.error("Received PING ACK, but no corresponding outbound PING found.");
@@ -273,6 +274,17 @@ class ApnsClientHandler<T extends ApnsPushNotification> extends Http2ConnectionH
             if (e.state() == IdleState.READER_IDLE) {
             	log.warn("Sending ping due to read idle timeout");
             	pingTimeout = readIdlePingTimeout;
+            	
+            	/* 
+            	 * We want to mark the client as 'disconnecting' as soon as possible
+            	 * so that the producers stop writing to it until either
+            	 * (a) it is established that the connection is alive or 
+            	 * (b) the connection is re-established.
+            	 * 
+            	 * Not doing so will lead to messages accumulating in the client and may
+            	 * lead to some buffer overflow.
+            	 */
+            	apnsClient.setDisconnecting(true);
             } 
             else {
                 log.trace("Sending ping due to inactivity.");
@@ -293,7 +305,6 @@ class ApnsClientHandler<T extends ApnsPushNotification> extends Http2ConnectionH
                             public void run() {
                                 log.debug("Closing channel due to ping timeout");
                                 future.channel().close();
-                                apnsClient.setDisconnecting(true);
                             }
                         }, pingTimeout, TimeUnit.SECONDS);
                     } else {
