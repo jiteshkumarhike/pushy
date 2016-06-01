@@ -172,7 +172,8 @@ public class ApnsClient<T extends ApnsPushNotification> {
      * then we suspect that the server has closed the connection and send a ping
      * to test the connection.
      */
-    private static int readIdleTimeout = 5;
+    private static int READ_IDLE_TIMEOUT = 6;
+    private static int READ_IDLE_PING_TIMEOUT = 4;
     private boolean isDisconnecting = false;
     
     /**
@@ -432,6 +433,7 @@ public class ApnsClient<T extends ApnsPushNotification> {
                                     .server(false)
                                     .apnsClient(ApnsClient.this)
                                     .encoderEnforceMaxConcurrentStreams(true)
+                                    .readIdlePingTimeout(READ_IDLE_PING_TIMEOUT)
                                     .build();
                             
                             synchronized (ApnsClient.this.bootstrap) {
@@ -440,7 +442,7 @@ public class ApnsClient<T extends ApnsPushNotification> {
                                 }
                             }
 
-                            context.pipeline().addLast(new IdleStateHandler(readIdleTimeout, 0, PING_IDLE_TIME));
+                            context.pipeline().addLast(new IdleStateHandler(READ_IDLE_TIMEOUT, 0, PING_IDLE_TIME));
                             context.pipeline().addLast(apnsClientHandler);
 
                             // Add this to the end of the queue so any events enqueued by the client handler happen

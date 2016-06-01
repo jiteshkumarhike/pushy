@@ -67,7 +67,7 @@ class ApnsClientHandler<T extends ApnsPushNotification> extends Http2ConnectionH
     private long nextPingId = new Random().nextLong();
     private ScheduledFuture<?> pingTimeoutFuture;
 
-    private int readIdlePingTimeout = 4; // seconds
+    private int readIdlePingTimeout; // seconds
     private static final int PING_TIMEOUT = 30; // seconds
 
     private static final String APNS_PATH_PREFIX = "/3/device/";
@@ -97,8 +97,9 @@ class ApnsClientHandler<T extends ApnsPushNotification> extends Http2ConnectionH
             return this;
         }
 
-        public void setReadIdlePingTimeout(int readIdlePingTimeout) {
+        public ApnsClientHandlerBuilder<S> readIdlePingTimeout(int readIdlePingTimeout) {
         	this.readIdlePingTimeout = readIdlePingTimeout;
+        	return this;
         }
         
         public ApnsClient<S> apnsClient() {
